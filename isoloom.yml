@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://www.isoloom.com/schema/v1.json
+# Bad Pods (by Seth Art, Bishop Fox): manifests that create pods with host access (hostPath,
+# hostPID, hostNetwork, hostIPC, privileged, and combinations), to practise escalating from
+# "may create pods" to the node and the cluster. Source: https://github.com/BishopFox/badPods,
+# vendored in badPods/. The lab is a cluster: one VM runs single-node k3s without Pod Security
+# admission (provision/k3s.sh), and provision/cluster.sh sets up the starting point Bad Pods
+# assumes. VM targets only. `isoloom run vagrant`, then `isoloom test vagrant`.
+version: 1
+name: bad-pods
+
+networks:
+  lab: { cidr: 10.60.121.0/24 }
+
+machines:
+  cluster:
+    networks: { lab: 10 }
+    services:
+      - { port: 22, name: ssh }
+      - { port: 6443, name: kubernetes-api }
+    resources: { cpus: 2, memory_mb: 3072, disk_gb: 30 }
+    vm:
+      os: ubuntu-24.04
+      provision: [provision/k3s.sh, provision/cluster.sh]
+
+checks:
+  - { name: the Kubernetes API answers, http: "https://cluster:6443/version", expect: any, wait: 300 }
+  - checks/player.sh
+
+message: |
+  A single-node Kubernetes cluster is up at {{ machines.cluster.addresses.lab }}. You are "player": you may
+  create pods (and deployments, jobs, daemonsets...) and exec into them in the namespace badpods,
+  nothing more. Use the bearer token in provision/tokens.csv against https://{{ machines.cluster.addresses.lab }}:6443,
+  or SSH in as player / player (kubectl is set up; Bad Pods' manifests are in ~/badPods).
+  Goal: root on the node, then read /root/flag.txt.
