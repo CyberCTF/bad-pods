@@ -4,6 +4,5 @@
   "question": "From the player's namespace-bound access, get root on the node and read /root/flag.txt.",
   "category": "MISC",
   "difficulty": 3,
-  "evidence_kind": "SECRET",
-  "capabilities": ["kubernetes-security", "container-escape", "privilege-escalation", "rbac-abuse"]
+  "evidence_kind": "SECRET"
 }
