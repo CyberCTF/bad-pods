@@ -72,7 +72,10 @@ for f in .profile .bashrc; do
 done
 chown player:player "$H/.profile" "$H/.bashrc"
 
-[ -f /root/flag.txt ] || echo 'badpods{node-root-91fd59c89c1f49e142b945d786cf3ec2}' > /root/flag.txt
+# The player's flag (CTF_FLAG_MAIN, given by the launcher); without one (CI, a run by hand) the
+# development flag.
+dev='badpods{node-root-91fd59c89c1f49e142b945d786cf3ec2}'
+printf '%s\n' "${CTF_FLAG_MAIN:-$dev}" > /root/flag.txt
 chmod 600 /root/flag.txt
 
 echo "player ready: namespace badpods, may create workloads and exec into pods"

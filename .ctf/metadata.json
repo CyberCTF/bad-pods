@@ -1,7 +1,7 @@
 {
   "title": "Bad Pods",
   "description": "A single-node Kubernetes cluster without Pod Security admission, with a foothold that may only create workloads and exec into them in one namespace. Bishop Fox's Bad Pods manifests (privileged, hostPath, hostPID, hostNetwork, hostIPC and combinations) show eight ways to turn that into node and cluster compromise.",
-  "question": "From the player's namespace-bound access, get root on the node and read /root/flag.txt.",
+  "question": "Solve the challenges listed for this lab: from the player's namespace-bound access, get root on the node and read /root/flag.txt, then answer the questions on each Bad Pod.",
   "category": "MISC",
   "difficulty": 3,
   "evidence_kind": "SECRET"

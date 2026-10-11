@@ -1,0 +1,93 @@
+{
+  "objectives": [
+    {
+      "key": "main",
+      "title": "Root on the node",
+      "prompt": "From the player's namespace-bound access (create workloads and exec into them in badpods), get root on the node and read /root/flag.txt.",
+      "check": { "evidence": "SECRET", "format": "FLAG{%s}" },
+      "dev": "badpods{node-root-91fd59c89c1f49e142b945d786cf3ec2}",
+      "hints": [
+        "The cluster has no Pod Security admission: nothing stops a pod from asking for host access.",
+        "Bad Pods' README lists eight pod specs, from everything-allowed to nothing-allowed. Which host settings would you ask for first?"
+      ],
+      "steps": [
+        {
+          "key": "permission",
+          "title": "Know your foothold",
+          "prompt": "Which Kubernetes resource may the player create in the badpods namespace, the one Bad Pods is built around? (singular)",
+          "check": { "answer": ["pod", "pods"] }
+        },
+        {
+          "key": "namespace",
+          "title": "Pick a host namespace",
+          "prompt": "Which pod spec field shares the node's process namespace with the pod?",
+          "check": { "answer": ["hostpid", "spec.hostpid"] }
+        }
+      ]
+    },
+    {
+      "key": "everything-allowed",
+      "title": "Everything allowed",
+      "prompt": "The everything-allowed Bad Pod mounts the node's root filesystem. At which path inside the container?",
+      "check": { "answer": ["/host", "/host/"] },
+      "optional": true,
+      "hints": ["Read the volumeMounts of the everything-allowed pod manifest."]
+    },
+    {
+      "key": "priv-and-hostpid",
+      "title": "Privileged and hostPID",
+      "prompt": "With privileged and hostPID, which utility enters the namespaces of the node's PID 1 to give a shell on the node?",
+      "check": { "answer": ["nsenter"] },
+      "optional": true,
+      "hints": ["It is a util-linux tool that enters other processes' namespaces."]
+    },
+    {
+      "key": "priv",
+      "title": "Privileged only",
+      "prompt": "A privileged pod without hostPath still sees the node's devices. In which directory of the container do the node's disks appear?",
+      "check": { "answer": ["/dev", "/dev/"] },
+      "optional": true,
+      "hints": ["A privileged container gets every device of the node: where do Linux devices live?"]
+    },
+    {
+      "key": "hostpath",
+      "title": "hostPath only",
+      "prompt": "With a hostPath mount of the node's filesystem, which file on this k3s node holds the cluster-admin kubeconfig?",
+      "check": { "answer": ["/etc/rancher/k3s/k3s.yaml", "k3s.yaml"] },
+      "optional": true,
+      "hints": ["k3s writes its admin kubeconfig under /etc/rancher."]
+    },
+    {
+      "key": "hostpid",
+      "title": "hostPID only",
+      "prompt": "With hostPID you can see every process on the node. Which file under /proc/<pid>/ exposes a process's environment variables?",
+      "check": { "answer": ["environ", "/proc/<pid>/environ", "/proc/pid/environ"] },
+      "optional": true,
+      "hints": ["Secrets are often passed to processes as environment variables."]
+    },
+    {
+      "key": "hostnetwork",
+      "title": "hostNetwork only",
+      "prompt": "A hostNetwork pod sits on the node's network, not the pod network. Which Kubernetes traffic control does that let it sidestep?",
+      "check": { "answer": ["network policy", "network policies", "networkpolicy", "networkpolicies"] },
+      "optional": true,
+      "hints": ["Think of the resource that restricts which pods may talk to which."]
+    },
+    {
+      "key": "hostipc",
+      "title": "hostIPC only",
+      "prompt": "With hostIPC, which shared-memory directory of the node do you inspect for data other processes left behind?",
+      "check": { "answer": ["/dev/shm", "/dev/shm/", "dev/shm"] },
+      "optional": true,
+      "hints": ["POSIX shared memory is a tmpfs under /dev."]
+    },
+    {
+      "key": "nothing-allowed",
+      "title": "Nothing allowed",
+      "prompt": "Without any host access, which credential mounted into every pod by default do you check for excess permissions?",
+      "check": { "answer": ["service account token", "serviceaccount token", "service account", "serviceaccount", "token"] },
+      "optional": true,
+      "hints": ["Look under /var/run/secrets/kubernetes.io/ inside the pod."]
+    }
+  ]
+}

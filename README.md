@@ -26,7 +26,8 @@ use it against `https://10.60.121.10:6443` from the lab network) bound to a Role
 pods, deployments, daemonsets, jobs, cronjobs, replicasets, statefulsets and replication
 controllers, and exec into pods, in the namespace `badpods`. The same identity has an
 unprivileged shell account on the node (SSH as player / player) with kubectl configured and the
-manifests in `~/badPods`. Goal: root on the node, then `/root/flag.txt`; from there, the cluster
+manifests in `~/badPods`. Goal: root on the node, then `/root/flag.txt` (the player's own flag, given
+at launch as `CTF_FLAG_MAIN` and written by `provision/cluster.sh`); from there, the cluster
 (the admin kubeconfig is root-only). About 3 GB of memory for the machine, plus 1 GB for the
 controller that runs the checks.
 
