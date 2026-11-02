@@ -2,21 +2,17 @@
 # `isoloom generate`. `isoloom check` fails when this file is out of date.
 # Auth:   export LINODE_TOKEN=<token> (the provider reads it).
 # Start:  terraform -chdir=.isoloom/cloud-vm/linode init && terraform -chdir=.isoloom/cloud-vm/linode apply \
-#           -var allowed_cidr=<your IP>/32 -var ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)" -var ssh_private_key_file=~/.ssh/id_ed25519
+#           -var allowed_cidr=<your IP>/32 -var ssh_public_key="$(cat ~/.ssh/id_ed25519.pub)"
 # Stop:   terraform -chdir=.isoloom/cloud-vm/linode destroy (same variables)
+# Then:   the machines wait for the project: run the lab through the Isothrum runner (run.json
+#         beside this file), which delivers the project over SSH, waits for each set-up and runs the checks.
 
 terraform {
   required_version = ">= 1.6"
   backend "local" {}
   required_providers {
-    linode = {
-      source  = "linode/linode"
-      version = "~> 2.0"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.0"
-    }
+    linode = { source = "linode/linode", version = "~> 4.7.0" }
+    random = { source = "hashicorp/random", version = "~> 3.9.1" }
   }
 }
 
@@ -24,33 +20,28 @@ variable "region" {
   type    = string
   default = "fr-par"
 }
-variable "allowed_cidr" {
-  type        = string
-  description = "Who may reach the machines (SSH and the published ports), e.g. your IP/32"
-}
-variable "ssh_public_key" {
-  type = string
-}
-variable "ssh_private_key_file" {
-  type        = string
-  description = "The private key of ssh_public_key: Terraform sets the machines up over SSH"
-}
-variable "auto_stop_minutes" {
-  type        = number
-  default     = 0
-  description = "Shut the machines down after this many minutes (0: never)"
-}
 
-variable "expires_at" {
-  type        = string
-  default     = ""
-  description = "When the environment should end, in Unix seconds (empty: no end), as a tag on every resource so a reaper can find what to destroy"
-}
 variable "inputs" {
   type        = map(string)
   default     = {}
   sensitive   = true
   description = "Values given at launch"
+}
+
+variable "allowed_cidr" {
+  type        = string
+  description = "Who may reach the machines (SSH and the published ports), e.g. your IP/32"
+}
+
+variable "ssh_public_key" {
+  type        = string
+  description = "The key the machines let in: the Isothrum runner's (it delivers the project and runs the checks over SSH)"
+}
+
+variable "expires_at" {
+  type        = string
+  default     = ""
+  description = "When the environment should end, in Unix seconds (empty: no end): a tag on every resource, so a reaper finds what to destroy, and the time the machines shut themselves down"
 }
 
 provider "linode" {}
@@ -64,24 +55,24 @@ resource "terraform_data" "id" {
 
 locals {
   name = "isoloom-bad-pods-${terraform_data.id.output}"
-  root = abspath("${path.module}/../../..")
 }
 
-# The environment's one network: a VPC with a subnet at its exact range, so every machine keeps
-# its address (10.60.121.0/24).
+# The environment's networks: a VPC with a subnet per network at its exact range, so every
+# machine keeps its address.
 resource "linode_vpc" "env" {
   label  = local.name
   region = var.region
 }
 
-resource "linode_vpc_subnet" "env" {
+resource "linode_vpc_subnet" "lab" {
   vpc_id = linode_vpc.env.id
   label  = "lab"
   ipv4   = "10.60.121.0/24"
 }
 
-resource "linode_firewall" "env" {
-  label           = local.name
+# Machine `cluster` on `lab`: what may reach it, and where it may not go.
+resource "linode_firewall" "cluster" {
+  label           = "${local.name}-cluster"
   inbound_policy  = "DROP"
   outbound_policy = "ACCEPT"
   inbound {
@@ -132,66 +123,30 @@ resource "linode_instance" "cluster" {
   booted          = true
   tags            = concat(["isoloom", "bad-pods", local.name], var.expires_at == "" ? [] : ["isoloom-expires-${var.expires_at}"])
   metadata {
-    user_data = base64encode(var.auto_stop_minutes > 0 ? "#!/bin/sh\nshutdown -h +${var.auto_stop_minutes}\n" : "")
+    user_data = base64encode("#!/bin/sh\n# Isoloom: this machine sets itself up. Its progress is in /var/lib/isoloom/ready (isoloom-ready/1), its output in /var/log/isoloom-setup.log. The Isothrum runner delivers the project over SSH.\nmkdir -p /var/lib/isoloom\ncat > /var/lib/isoloom/setup.sh.new <<'ISOLOOM_SETUP'\n#!/bin/sh\numask 022\ncase \"$(head -n1 /var/lib/isoloom/ready 2>/dev/null)\" in ready|failed:*) exit 0 ;; esac\ne=${var.expires_at}; if [ -n \"$e\" ]; then m=$(( (e - $(date +%s)) / 60 )); [ \"$m\" -ge 1 ] || m=1; shutdown -h \"+$m\" >/dev/null 2>&1 || true; fi\npart=$(cat /var/lib/isoloom/part 2>/dev/null || echo 1)\nif [ \"$part\" = 1 ]; then\necho 'running: waiting for the project (the runner delivers it over SSH)' > /var/lib/isoloom/ready; { i=0; until [ -f /var/lib/isoloom/project-delivered ]; do i=$((i+5)); if [ $i -gt 2400 ]; then echo 'the project never came: start the lab through the Isothrum runner (run.json), which delivers it over SSH' >&2; exit 1; fi; sleep 5; done; } || { echo 'failed: waiting for the project (the runner delivers it over SSH)' > /var/lib/isoloom/ready; exit 1; }\necho 'running: the machine'\\''s interfaces' > /var/lib/isoloom/ready; { command -v sudo >/dev/null || (apt-get update -qq && apt-get install -y -qq sudo); } || { echo 'failed: the machine'\\''s interfaces' > /var/lib/isoloom/ready; exit 1; }\necho 'running: growing the disk' > /var/lib/isoloom/ready; { sh -c 'set -e\npart_grow() {\n  dev=$(readlink -f \"$1\")\n  disk=/dev/$(lsblk -no PKNAME \"$dev\" | head -n1)\n  num=$(cat \"/sys/class/block/$(basename \"$dev\")/partition\")\n  if command -v growpart >/dev/null; then growpart \"$disk\" \"$num\" >/dev/null || true\n  else echo \", +\" | sfdisk --no-reread -N \"$num\" \"$disk\" >/dev/null 2>&1 && partx -u \"$disk\" || true; fi\n}\nfs_grow() { resize2fs \"$1\" >/dev/null 2>&1 || xfs_growfs / >/dev/null 2>&1 || true; }\nsrc=$(findmnt -n -o SOURCE /)\ncase \"$(lsblk -no TYPE \"$src\" | head -n1)\" in\n  lvm)\n    vg=$(lvs --noheadings -o vg_name \"$src\" | tr -d '\\'' '\\'')\n    for pv in $(pvs --noheadings -o pv_name -S vg_name=\"$vg\" | tr -d '\\'' '\\''); do part_grow \"$pv\"; pvresize \"$pv\" >/dev/null; done\n    lvextend -l +100%FREE \"$src\" >/dev/null 2>&1 || true\n    fs_grow \"$src\" ;;\n  part) part_grow \"$src\"; fs_grow \"$src\" ;;\nesac'; } || { echo 'failed: growing the disk' > /var/lib/isoloom/ready; exit 1; }\necho 'running: hosts file' > /var/lib/isoloom/ready; { sh -c 'printf '\\''%s\\n'\\'' '\\''10.60.121.10 cluster'\\'' | while IFS= read -r l; do grep -qxF \"$l\" /etc/hosts || printf '\\''%s\\n'\\'' \"$l\" >> /etc/hosts; done'; } || { echo 'failed: hosts file' > /var/lib/isoloom/ready; exit 1; }\necho 'running: waiting for its secrets' > /var/lib/isoloom/ready; { sh -c 'set -e\nn=0; until [ -f /var/lib/isoloom/secrets/.delivered ]; do [ \"$n\" -gt 0 ] || echo '\\''cluster: waiting for its secrets, which the runner (isothrum up) delivers'\\''; n=$((n+1)); if [ \"$n\" -gt 360 ]; then echo '\\''cluster: its secrets never came; start the environment with the runner (isothrum up), which reads them from their stores and delivers them'\\'' >&2; exit 1; fi; sleep 5; done\nmkdir -p /etc/isoloom\ncat > /etc/isoloom/apply-secrets.sh <<'\\''APPLY-SECRETS'\\''\n#!/bin/sh\n# The machine'\\''s secrets, put in place\ninstall -D -o 0 -g 0 -m 0400 /var/lib/isoloom/secrets/input-ctf-flag-main '\\''/run/lab/ctf_flag_main'\\''\nexit 0\nAPPLY-SECRETS\nchmod +x /etc/isoloom/apply-secrets.sh\nif command -v systemctl >/dev/null; then\ncat > /etc/systemd/system/isoloom-apply-secrets.service <<'\\''UNIT'\\''\n[Unit]\nDescription=The machine'\\''s secrets, put in place\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=-/etc/isoloom/apply-secrets.sh\n\n[Install]\nWantedBy=multi-user.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable isoloom-apply-secrets.service\nsystemctl restart isoloom-apply-secrets.service\nelse\nmkdir -p /etc/local.d && ln -sf /etc/isoloom/apply-secrets.sh /etc/local.d/isoloom-apply-secrets.start\nrc-update add local default >/dev/null 2>&1 || true\n/etc/isoloom/apply-secrets.sh || true\nfi'; } || { echo 'failed: waiting for its secrets' > /var/lib/isoloom/ready; exit 1; }\necho 'running: provision/k3s.sh' > /var/lib/isoloom/ready; { sh -c 'cd /opt/isoloom && sh -c '\\''sh provision/k3s.sh'\\'''; } || { echo 'failed: provision/k3s.sh' > /var/lib/isoloom/ready; exit 1; }\necho 'running: provision/cluster.sh' > /var/lib/isoloom/ready; { sh -c 'cd /opt/isoloom && sh -c '\\''sh provision/cluster.sh'\\'''; } || { echo 'failed: provision/cluster.sh' > /var/lib/isoloom/ready; exit 1; }\necho 'running: health check' > /var/lib/isoloom/ready; { sh -c 'mkdir -p /var/lib/isoloom && echo ready > /var/lib/isoloom/ready'; } || { echo 'failed: health check' > /var/lib/isoloom/ready; exit 1; }\nfi\necho ready > /var/lib/isoloom/ready\nrm -f /var/lib/isoloom/part\ncommand -v systemctl >/dev/null && systemctl disable isoloom-setup.service >/dev/null 2>&1\nexit 0\nISOLOOM_SETUP\nmv -f /var/lib/isoloom/setup.sh.new /var/lib/isoloom/setup.sh\nif command -v systemctl >/dev/null; then\ncat > /etc/systemd/system/isoloom-setup.service <<'ISOLOOM_UNIT'\n[Unit]\nDescription=Isoloom: the machine's set-up\nWants=network-online.target\nAfter=network-online.target cloud-final.service google-startup-scripts.service\n\n[Service]\nType=oneshot\nExecStart=/bin/sh /var/lib/isoloom/setup.sh\nStandardOutput=append:/var/log/isoloom-setup.log\nStandardError=append:/var/log/isoloom-setup.log\nTimeoutStartSec=0\n\n[Install]\nWantedBy=multi-user.target\nISOLOOM_UNIT\nsystemctl daemon-reload\nsystemctl enable isoloom-setup.service >/dev/null 2>&1\nsystemctl start --no-block isoloom-setup.service\nelse\nnohup sh /var/lib/isoloom/setup.sh >> /var/log/isoloom-setup.log 2>&1 &\nfi\n")
   }
   interface {
     purpose = "public"
   }
   interface {
     purpose   = "vpc"
-    subnet_id = linode_vpc_subnet.env.id
+    subnet_id = linode_vpc_subnet.lab.id
     ipv4 {
       vpc = "10.60.121.10"
     }
   }
 }
 
-resource "terraform_data" "cluster" {
-  triggers_replace = [linode_instance.cluster.id]
-  connection {
-    type        = "ssh"
-    host        = one(linode_instance.cluster.ipv4)
-    user        = "root"
-    private_key = file(pathexpand(var.ssh_private_key_file))
-    timeout     = "10m"
-  }
-  provisioner "remote-exec" {
-    inline = ["cloud-init status --wait >/dev/null 2>&1 || true", "command -v sudo >/dev/null || (apt-get update -qq && apt-get install -y -qq sudo)", "sudo mkdir -p /opt/isoloom && sudo chown root /opt/isoloom"]
-  }
-  provisioner "local-exec" {
-    command = "tar -czf \"${path.module}/.isoloom-project-cluster.tgz\" --exclude=.git --exclude=.vagrant --exclude=.terraform --exclude=.isoloom-project*.tgz -C \"${local.root}\" ."
-  }
-  provisioner "file" {
-    source      = "${path.module}/.isoloom-project-cluster.tgz"
-    destination = "/tmp/isoloom-project.tgz"
-  }
-  provisioner "file" {
-    content     = join("\n", ["CTF_FLAG_MAIN=${jsonencode(lookup(var.inputs, "CTF_FLAG_MAIN", ""))}"])
-    destination = "/tmp/isoloom-inputs.env"
-  }
-  provisioner "remote-exec" {
-    inline = [
-      "set -e",
-      "cloud-init status --wait >/dev/null 2>&1 || true",
-      "tar -xzf /tmp/isoloom-project.tgz -C /opt/isoloom && rm -f /tmp/isoloom-project.tgz",
-      "cd /opt/isoloom && sudo -E sh -c 'set -a; . /tmp/isoloom-inputs.env; set +a; sh provision/k3s.sh'",
-      "cd /opt/isoloom && sudo -E sh -c 'set -a; . /tmp/isoloom-inputs.env; set +a; sh provision/cluster.sh'",
-      "sudo mkdir -p /var/lib/isoloom && echo ready | sudo tee /var/lib/isoloom/ready >/dev/null"
-    ]
-  }
-  depends_on = [linode_firewall.env]
+output "machines" {
+  value = { cluster = one(linode_instance.cluster.ipv4) }
 }
 
-output "machines" {
-  value = {
-    cluster = one(linode_instance.cluster.ipv4)
-  }
+output "address_cluster" {
+  value = one(linode_instance.cluster.ipv4)
 }
 
 output "ssh_users" {
-  value = {
-    cluster = "root"
-  }
+  value = { cluster = "root" }
 }
 
 output "ip" {

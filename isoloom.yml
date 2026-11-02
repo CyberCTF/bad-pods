@@ -9,22 +9,27 @@ version: 1
 name: bad-pods
 
 # Given by the CyberCTF launcher: this player's flag. Without it the development flag.
-inputs: [CTF_FLAG_MAIN]
+inputs:
+  CTF_FLAG_MAIN: {}
 
 networks:
   lab: { cidr: 10.60.121.0/24 }
 
 machines:
   cluster:
+    os: ubuntu@24.04
     networks: { lab: 10 }
-    services:
-      - { port: 22, name: ssh }
-      - { port: 6443, name: kubernetes-api }
+    ports:
+      ssh: 22
+      kubernetes-api: 6443
     resources: { cpus: 2, memory_mb: 3072, disk_gb: 30 }
-    inputs: [CTF_FLAG_MAIN]   # written to /root/flag.txt by provision/cluster.sh
-    vm:
-      os: ubuntu-24.04
-      provision: [provision/k3s.sh, provision/cluster.sh]
+    # The flag reaches provision/cluster.sh as a file, which writes it to /root/flag.txt.
+    files:
+      - { path: /run/lab/ctf_flag_main, input: CTF_FLAG_MAIN }
+    app:
+      steps:
+        - run: provision/k3s.sh
+        - run: provision/cluster.sh
 
 checks:
   - { name: the Kubernetes API answers, http: "https://cluster:6443/version", expect: any, wait: 300 }

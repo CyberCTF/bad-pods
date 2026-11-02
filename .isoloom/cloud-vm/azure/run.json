@@ -1,0 +1,421 @@
+{
+  "$schema": "https://www.isoloom.com/schema/run-manifest/v0.json",
+  "manifest_version": 0,
+  "generator": {
+    "name": "isoloom",
+    "version": "1.0.2"
+  },
+  "environment": {
+    "name": "bad-pods",
+    "instance": null,
+    "message": "A single-node Kubernetes cluster is up at 10.60.121.10. You are \"player\": you may\ncreate pods (and deployments, jobs, daemonsets...) and exec into them in the namespace badpods,\nnothing more. Use the bearer token in provision/tokens.csv against https://10.60.121.10:6443,\nor SSH in as player / player (kubectl is set up; Bad Pods' manifests are in ~/badPods).\nGoal: root on the node, then read /root/flag.txt.\n"
+  },
+  "target": "cloud-vm",
+  "cloud": "azure",
+  "driver": "terraform",
+  "hosts": [
+    "linux",
+    "macos",
+    "windows"
+  ],
+  "tools": [
+    {
+      "name": "terraform",
+      "probe": [
+        "terraform",
+        "version"
+      ],
+      "min_version": "1.11.0"
+    },
+    {
+      "name": "ssh",
+      "probe": [
+        "ssh",
+        "-V"
+      ]
+    }
+  ],
+  "identity": {
+    "terraform": {
+      "module": ".",
+      "state": "runner"
+    }
+  },
+  "params": [
+    {
+      "name": "subscription_id",
+      "description": "Default: ARM_SUBSCRIPTION_ID from the environment.",
+      "required": true,
+      "set_by": "embedder",
+      "deliver": [
+        {
+          "via": "tf_var",
+          "var": "subscription_id"
+        }
+      ]
+    },
+    {
+      "name": "region",
+      "description": "The module's `region`.",
+      "default": "swedencentral",
+      "set_by": "embedder",
+      "deliver": [
+        {
+          "via": "tf_var",
+          "var": "region"
+        }
+      ]
+    },
+    {
+      "name": "allowed_cidr",
+      "description": "Who may reach the machines (SSH and the published ports), e.g. your IP/32.",
+      "required": true,
+      "set_by": "embedder",
+      "deliver": [
+        {
+          "via": "tf_var",
+          "var": "allowed_cidr"
+        }
+      ]
+    },
+    {
+      "name": "ISOLOOM_DERIVED",
+      "description": "0: the checks derived from the spec (reachability, no internet) are skipped.",
+      "default": "1",
+      "values": [
+        "0",
+        "1"
+      ],
+      "set_by": "embedder",
+      "deliver": [
+        {
+          "via": "env",
+          "var": "ISOLOOM_DERIVED",
+          "steps": [
+            "check-networks"
+          ]
+        }
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "name": "ARM_CLIENT_ID",
+      "kind": "connection",
+      "required": false,
+      "sensitive": true,
+      "source": {
+        "store": "env",
+        "reference": "ARM_CLIENT_ID"
+      },
+      "deliver": [
+        {
+          "via": "env",
+          "var": "ARM_CLIENT_ID",
+          "steps": [
+            "init",
+            "apply",
+            "destroy"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ARM_CLIENT_SECRET",
+      "kind": "connection",
+      "required": false,
+      "sensitive": true,
+      "source": {
+        "store": "env",
+        "reference": "ARM_CLIENT_SECRET"
+      },
+      "deliver": [
+        {
+          "via": "env",
+          "var": "ARM_CLIENT_SECRET",
+          "steps": [
+            "init",
+            "apply",
+            "destroy"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ARM_TENANT_ID",
+      "kind": "connection",
+      "required": false,
+      "sensitive": true,
+      "source": {
+        "store": "env",
+        "reference": "ARM_TENANT_ID"
+      },
+      "deliver": [
+        {
+          "via": "env",
+          "var": "ARM_TENANT_ID",
+          "steps": [
+            "init",
+            "apply",
+            "destroy"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "input-ctf-flag-main",
+      "kind": "secret",
+      "required": false,
+      "sensitive": true,
+      "machines": [
+        "cluster"
+      ],
+      "default": "",
+      "deliver": [
+        {
+          "via": "guest",
+          "machine": "cluster",
+          "transport": "ssh"
+        }
+      ]
+    }
+  ],
+  "networks": [
+    {
+      "name": "lab",
+      "cidr": "10.60.121.0/24",
+      "internet": true,
+      "native": "lab"
+    }
+  ],
+  "machines": [
+    {
+      "name": "cluster",
+      "role": "target",
+      "os": "ubuntu-24.04",
+      "arch": "amd64",
+      "addresses": {
+        "lab": "10.60.121.10"
+      },
+      "ports": [
+        {
+          "name": "ssh",
+          "port": 22,
+          "protocol": "tcp",
+          "http": false
+        },
+        {
+          "name": "kubernetes-api",
+          "port": 6443,
+          "protocol": "tcp",
+          "http": false
+        }
+      ]
+    }
+  ],
+  "lifecycle": {
+    "up": [
+      {
+        "id": "clear-lock",
+        "action": "terraform.clear_lock"
+      },
+      {
+        "id": "init",
+        "note": "Preparing Terraform and its providers…",
+        "argv": [
+          "terraform",
+          "init",
+          "-input=false",
+          "-no-color",
+          "-backend-config=path=${run.state_dir}/terraform.tfstate"
+        ],
+        "env": {
+          "TF_DATA_DIR": "${run.state_dir}/.terraform",
+          "TF_INPUT": "0",
+          "TF_IN_AUTOMATION": "1",
+          "TF_VAR_ssh_public_key": "${run.ssh_public_key}"
+        },
+        "timeout_s": 900
+      },
+      {
+        "id": "apply",
+        "note": "Creating the lab's machines in the cloud…",
+        "argv": [
+          "terraform",
+          "apply",
+          "-auto-approve",
+          "-input=false",
+          "-no-color"
+        ],
+        "env": {
+          "TF_DATA_DIR": "${run.state_dir}/.terraform",
+          "TF_INPUT": "0",
+          "TF_IN_AUTOMATION": "1",
+          "TF_VAR_ssh_public_key": "${run.ssh_public_key}"
+        },
+        "timeout_s": 3600
+      },
+      {
+        "id": "archive",
+        "note": "Archiving the project…",
+        "action": "project.archive",
+        "with": {
+          "root": "../../.."
+        }
+      },
+      {
+        "id": "deliver-cluster",
+        "note": "Copying the project into cluster…",
+        "action": "ssh.run",
+        "with": {
+          "command": "sudo sh -c 'mkdir -p /opt/isoloom /var/lib/isoloom && tar -xzf - -C /opt/isoloom && touch /var/lib/isoloom/project-delivered'",
+          "host": "${outputs.address_cluster}",
+          "user": "isoloom",
+          "wait_s": "900"
+        },
+        "stdin": "${run.state_dir}/project.tgz",
+        "timeout_s": 1500
+      }
+    ],
+    "down": [
+      {
+        "id": "clear-lock",
+        "action": "terraform.clear_lock"
+      },
+      {
+        "id": "init",
+        "note": "Preparing Terraform and its providers…",
+        "argv": [
+          "terraform",
+          "init",
+          "-input=false",
+          "-no-color",
+          "-backend-config=path=${run.state_dir}/terraform.tfstate"
+        ],
+        "env": {
+          "TF_DATA_DIR": "${run.state_dir}/.terraform",
+          "TF_INPUT": "0",
+          "TF_IN_AUTOMATION": "1",
+          "TF_VAR_ssh_public_key": "${run.ssh_public_key}"
+        },
+        "timeout_s": 900
+      },
+      {
+        "id": "destroy",
+        "note": "Removing the lab from the cloud…",
+        "argv": [
+          "terraform",
+          "destroy",
+          "-auto-approve",
+          "-input=false",
+          "-no-color"
+        ],
+        "env": {
+          "TF_DATA_DIR": "${run.state_dir}/.terraform",
+          "TF_INPUT": "0",
+          "TF_IN_AUTOMATION": "1",
+          "TF_VAR_ssh_public_key": "${run.ssh_public_key}"
+        },
+        "timeout_s": 3600
+      }
+    ],
+    "status": {
+      "id": "state",
+      "action": "terraform.read_state"
+    }
+  },
+  "ready": [
+    {
+      "kind": "step_ok",
+      "step": "apply",
+      "means": "the machines exist and booted; each sets itself up from its user data once the project is in"
+    },
+    {
+      "kind": "ready_file",
+      "host": "${outputs.address_cluster}",
+      "user": "isoloom",
+      "path": "${outputs.ready_file}",
+      "log": "/var/log/isoloom-setup.log",
+      "grammar": "isoloom-ready/1",
+      "timeout_s": 2400,
+      "unreachable_timeout_s": 600,
+      "interval_s": 10
+    }
+  ],
+  "outputs": [
+    {
+      "name": "ip",
+      "description": "Where to stand: the access machine's public address (the first Linux machine's, else the controller's).",
+      "role": "address",
+      "sensitive": false,
+      "from": {
+        "kind": "terraform_output",
+        "name": "ip"
+      }
+    },
+    {
+      "name": "ready_file",
+      "description": "Where each Linux machine's set-up says how far it got (isoloom-ready/1).",
+      "role": "info",
+      "sensitive": false,
+      "from": {
+        "kind": "terraform_output",
+        "name": "ready_file"
+      }
+    },
+    {
+      "name": "address_cluster",
+      "description": "cluster's public address: the runner's SSH and its published ports reach it there.",
+      "role": "address",
+      "sensitive": false,
+      "from": {
+        "kind": "terraform_output",
+        "name": "address_cluster"
+      }
+    }
+  ],
+  "checks": {
+    "protocol": "isoloom-check/1",
+    "setup": [],
+    "runners": [
+      {
+        "id": "networks",
+        "from": "from cluster",
+        "checks": [
+          {
+            "name": "the Kubernetes API answers",
+            "kind": "http",
+            "wait_s": 300,
+            "derived": false
+          },
+          {
+            "name": "checks/player.sh",
+            "kind": "script",
+            "wait_s": 0,
+            "derived": false
+          }
+        ],
+        "step": {
+          "id": "check-networks",
+          "action": "ssh.run",
+          "with": {
+            "command": "cd /opt/isoloom && ISOLOOM_DERIVED=${params.ISOLOOM_DERIVED} sh .isoloom/cloud-vm/checks/networks.sh",
+            "host": "${outputs.address_cluster}",
+            "user": "isoloom"
+          },
+          "timeout_s": 390
+        }
+      }
+    ],
+    "teardown": []
+  },
+  "recovery": {
+    "retries": 0,
+    "apply_retries": 1
+  },
+  "expiry": {
+    "tf_var": "expires_at",
+    "unit": "unix_seconds",
+    "default_minutes": 240
+  }
+}

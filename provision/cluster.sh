@@ -75,6 +75,8 @@ chown player:player "$H/.profile" "$H/.bashrc"
 # The player's flag (CTF_FLAG_MAIN, given by the launcher); without one (CI, a run by hand) the
 # development flag.
 dev='badpods{node-root-91fd59c89c1f49e142b945d786cf3ec2}'
+# The launcher delivers the flag as a file (a sensitive input); read it into the environment.
+[ -r /run/lab/ctf_flag_main ] && CTF_FLAG_MAIN=$(cat /run/lab/ctf_flag_main)
 printf '%s\n' "${CTF_FLAG_MAIN:-$dev}" > /root/flag.txt
 chmod 600 /root/flag.txt
 
